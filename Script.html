@@ -1,0 +1,465 @@
+<script>
+  let currentUser = "";
+  let currentRoomId = "";
+  let isHost = false;
+  let pollingTimer = null;
+  let isUpdatingState = false; 
+  let isAdvancingPhase = false; 
+  let sendingMessages = []; 
+  let currentChatFilter = 'ALL';
+
+  function switchScreen(screenId) {
+    const screens = document.querySelectorAll('.screen');
+    screens.forEach(screen => screen.classList.remove('active'));
+    document.getElementById(screenId).classList.add('active');
+  }
+
+  function enterLobby() {
+    const nameInput = document.getElementById('username-input');
+    const name = nameInput.value.trim();
+    if (!name) return alert("名前を入力してください");
+
+    currentUser = name;
+    document.getElementById('display-name').innerText = currentUser;
+    switchScreen('lobby-screen');
+    loadRoomList();
+  }
+
+  function loadRoomList() {
+    google.script.run.withSuccessHandler(rooms => {
+      const container = document.getElementById('room-list');
+      if (!rooms || rooms.length === 0) {
+        container.innerHTML = '<p style="font-size: 0.9em; color: #666; margin-top: 20px;">現在部屋はありません</p>';
+        return;
+      }
+      let html = '';
+      rooms.forEach(r => {
+        html += `
+          <div style="border-bottom: 1px solid rgba(0,0,0,0.1); padding: 8px; text-align: left; cursor: pointer;" onclick="joinRoom('${r.id}')">
+            <strong>${r.name}</strong> (ID: ${r.id}) - <span style="color:#0066cc;">${r.status}</span><br>
+            <span style="font-size: 0.8em; color: #555;">参加者: ${r.members.join(', ')}</span>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    }).getRoomList();
+  }
+
+  function createRoom() {
+    const roomName = document.getElementById('new-room-name').value;
+    if (!roomName) return alert("ルーム名を入力してください");
+
+    google.script.run.withSuccessHandler(res => {
+      if (res.success) enterRoom(res.roomId);
+      else alert(res.message);
+    }).createRoom(roomName, currentUser);
+  }
+
+  function joinRoomById() {
+    const roomId = document.getElementById('join-room-id').value;
+    if (!roomId || roomId.length !== 4) return alert("4桁のルームIDを入力してください");
+    joinRoom(roomId);
+  }
+
+  function joinRoom(roomId) {
+    google.script.run.withSuccessHandler(res => {
+      if (res.success) enterRoom(res.room.id);
+      else alert(res.message);
+    }).joinRoom(roomId, currentUser);
+  }
+
+  function enterRoom(roomId) {
+    currentRoomId = roomId;
+    switchScreen('game-screen');
+    startPolling();
+  }
+
+  function startPolling() {
+    if (pollingTimer) clearInterval(pollingTimer);
+    updateRoomState();
+    pollingTimer = setInterval(updateRoomState, 3000); 
+  }
+
+  function stopPolling() {
+    if (pollingTimer) clearInterval(pollingTimer);
+  }
+
+  function updateRoomState() {
+    if (!currentRoomId || !currentUser || isUpdatingState) return;
+
+    isUpdatingState = true;
+
+    google.script.run
+      .withFailureHandler(err => {
+        console.error("同期エラー:", err);
+        isUpdatingState = false;
+      })
+      .withSuccessHandler(res => {
+        isUpdatingState = false;
+
+        if (!res || !res.success) {
+          if (res && res.kicked) {
+            alert("部屋からキックされました。");
+            stopPolling();
+            currentRoomId = "";
+            switchScreen('lobby-screen');
+            loadRoomList();
+          }
+          return;
+        }
+
+        const room = res.room;
+        const players = res.players;
+        const myInfo = res.myInfo;
+        const logs = res.logs;
+
+        isHost = (room.host === currentUser);
+
+        if (room.status === 'NIGHT' || room.status === 'FIRST_NIGHT') {
+          document.body.classList.add('night-mode');
+        } else {
+          document.body.classList.remove('night-mode');
+        }
+
+        document.getElementById('header-room-name').innerText = room.name;
+        document.getElementById('header-room-id').innerText = room.id;
+        
+        const advBtn = document.getElementById('advance-phase-btn');
+        advBtn.style.display = (isHost && room.status !== 'LOBBY' && room.status !== 'FINISHED') ? 'inline-block' : 'none';
+
+        const resetBtn = document.getElementById('reset-lobby-btn');
+        if (resetBtn) {
+          resetBtn.style.display = (isHost && room.status === 'FINISHED') ? 'inline-block' : 'none';
+        }
+
+        let timerStr = "";
+        if (room.endTime > 0 && room.status !== 'LOBBY' && room.status !== 'FINISHED') {
+          const remainingSec = Math.max(0, Math.floor((room.endTime - new Date().getTime()) / 1000));
+          const min = Math.floor(remainingSec / 60);
+          const sec = remainingSec % 60;
+          timerStr = ` [残り ${min}:${sec < 10 ? '0' : ''}${sec}]`;
+
+          if (remainingSec === 0 && isHost && !isAdvancingPhase) {
+            isAdvancingPhase = true;
+            advancePhase();
+          }
+        }
+
+        let phaseText = '';
+        if (room.status === 'LOBBY') phaseText = '待機中 (ロビー)';
+        else if (room.status === 'FIRST_NIGHT') phaseText = `${room.day}日目 【初日夜】` + timerStr;
+        else if (room.status === 'DAY') phaseText = `${room.day}日目 【昼の議論】` + timerStr;
+        else if (room.status === 'VOTE') phaseText = `${room.day}日目 【投票中】` + timerStr;
+        else if (room.status === 'NIGHT') phaseText = `${room.day}日目 【夜の行動】` + timerStr;
+        else if (room.status === 'FINISHED') phaseText = `【ゲーム終了】`;
+        document.getElementById('header-phase-info').innerText = phaseText;
+
+        // 役職カード
+        const roleCard = document.getElementById('my-role-card');
+        if (room.status !== 'LOBBY' && myInfo.role) {
+          roleCard.style.display = 'block';
+          document.getElementById('my-role-title').innerText = myInfo.role;
+          document.getElementById('my-status-tag').innerHTML = myInfo.isAlive 
+            ? '<span style="color:green; font-weight:bold;">[生存]</span>' 
+            : '<span style="color:red; font-weight:bold;">[死亡 (霊界可視化中)]</span>';
+        } else {
+          roleCard.style.display = 'none';
+        }
+
+        // ロビー設定
+        if (room.status === 'LOBBY') {
+          document.getElementById('lobby-settings-panel').style.display = 'block';
+          document.getElementById('host-badge').style.display = isHost ? 'inline' : 'none';
+          document.getElementById('start-game-btn').style.display = isHost ? 'block' : 'none';
+
+          const inputs = document.querySelectorAll('.setting-group input, .setting-group select');
+          inputs.forEach(inp => inp.disabled = !isHost);
+
+          if (room.roles) {
+            document.getElementById('setting-day-time').value = room.dayTime || 4;
+            document.getElementById('setting-vote-time').value = room.voteTime || 1;
+            document.getElementById('setting-night-time').value = room.nightTime || 1;
+            document.getElementById('setting-tie-rule').value = room.tieRule || 'random';
+
+            document.getElementById('role-villager').value = room.roles.villager || 0;
+            document.getElementById('role-seer').value = room.roles.seer || 0;
+            document.getElementById('role-medium').value = room.roles.medium || 0;
+            document.getElementById('role-bodyguard').value = room.roles.bodyguard || 0;
+            document.getElementById('role-madman').value = room.roles.madman || 0;
+            document.getElementById('role-werewolf').value = room.roles.werewolf || 0;
+            document.getElementById('role-fox').value = room.roles.fox || 0;
+            calcRoleTotal();
+          }
+        } else {
+          document.getElementById('lobby-settings-panel').style.display = 'none';
+        }
+
+        setupActionPanel(room.status, myInfo, players);
+
+        // 送信先プルダウン制御
+        const channelSelect = document.getElementById('chat-channel-select');
+        const prevChan = channelSelect.value;
+        let chanHtml = '';
+
+        if (!myInfo.isAlive) {
+          chanHtml += '<option value="GRAVE">👻 霊界会話</option>';
+        } else if (room.status === 'NIGHT' || room.status === 'FIRST_NIGHT') {
+          if (myInfo.role === '人狼') {
+            chanHtml += '<option value="WOLF">🐺 人狼の囁き</option>';
+          }
+        } else {
+          chanHtml += '<option value="CHAT">💬 全体会話</option>';
+          if (myInfo.role === '人狼') {
+            chanHtml += '<option value="WOLF">🐺 人狼の囁き</option>';
+          }
+        }
+        chanHtml += '<option value="SOLILOQUY">🔒 独り言 (自分のみ)</option>';
+        channelSelect.innerHTML = chanHtml;
+        if (prevChan && channelSelect.querySelector(`option[value="${prevChan}"]`)) {
+          channelSelect.value = prevChan;
+        }
+
+        // 参加者一覧
+        document.getElementById('player-count').innerText = players.length;
+        let playerHtml = '';
+        players.forEach(p => {
+          let statusStr = p.isAlive ? '<span style="color:green;">[生]</span>' : '<span style="color:gray;">[死]</span>';
+          let roleTag = p.role ? ` <span style="font-size:0.8em; color:#d9534f; font-weight:bold;">(${p.role})</span>` : '';
+          let kickBtn = (isHost && p.name !== currentUser && room.status === 'LOBBY') 
+            ? `<button onclick="kickPlayer('${p.name}')" class="danger" style="padding: 2px 6px; font-size: 0.75em;">キック</button>` 
+            : '';
+          let hostTag = (p.name === room.host) ? ' <span style="font-size:0.75em; color:#0066cc;">[主]</span>' : '';
+
+          playerHtml += `
+            <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.7); padding: 6px 10px; border-radius: 6px;">
+              <div>
+                ${statusStr} <strong>${p.name}</strong>${hostTag}${roleTag}
+              </div>
+              <div>${kickBtn}</div>
+            </div>
+          `;
+        });
+        document.getElementById('player-list-box').innerHTML = playerHtml;
+
+        // チャットログ描画
+        let chatHtml = '';
+        if (logs && logs.length > 0) {
+          logs.forEach(l => {
+            if (currentChatFilter !== 'ALL') {
+              if (currentChatFilter === 'CHAT' && l.type !== 'CHAT') return;
+              if (currentChatFilter === 'WOLF' && l.type !== 'WOLF') return;
+              if (currentChatFilter === 'GRAVE' && l.type !== 'GRAVE') return;
+              if (currentChatFilter === 'SOLILOQUY' && l.type !== 'SOLILOQUY') return;
+              if (currentChatFilter === 'SYSTEM' && (l.type !== 'SYSTEM' && l.type !== 'PRIVATE')) return;
+            }
+
+            let isSys = (l.type === 'SYSTEM' || l.type === 'PRIVATE');
+            let isMe = (l.sender === currentUser && !isSys);
+
+            let typeBadge = '';
+            let msgClass = '';
+
+            if (l.type === 'SYSTEM') {
+              typeBadge = '<span class="badge badge-system">システム</span> ';
+              msgClass = 'system';
+            } else if (l.type === 'PRIVATE') {
+              typeBadge = '<span class="badge badge-private">判定</span> ';
+              msgClass = 'system private';
+            } else if (l.type === 'WOLF') {
+              typeBadge = '<span class="badge badge-wolf">人狼</span> ';
+              msgClass = 'wolf';
+            } else if (l.type === 'GRAVE') {
+              typeBadge = '<span class="badge badge-grave">霊界</span> ';
+              msgClass = 'grave';
+            } else if (l.type === 'SOLILOQUY') {
+              typeBadge = '<span class="badge badge-soliloquy">独り言</span> ';
+              msgClass = 'soliloquy';
+            } else {
+              typeBadge = '<span class="badge badge-chat">全体</span> ';
+            }
+
+            chatHtml += `
+              <div class="chat-msg ${msgClass} ${isMe ? 'my-msg' : ''}">
+                <span style="font-size: 0.75em; opacity: 0.8;">[${l.time}]</span> 
+                ${typeBadge}
+                <strong>${isMe ? '' : l.sender + ':'}</strong> ${l.msg}
+              </div>
+            `;
+          });
+        }
+
+        sendingMessages.forEach(sMsg => {
+          chatHtml += `
+            <div class="chat-msg my-msg sending">
+              <span style="font-size: 0.75em; opacity: 0.8;">[送信中...]</span> 
+              ${sMsg}
+            </div>
+          `;
+        });
+
+        const chatBox = document.getElementById('chat-box');
+        chatBox.innerHTML = chatHtml;
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+      }).getRoomDetails(currentRoomId, currentUser);
+  }
+
+  function setChatFilter(filterType) {
+    currentChatFilter = filterType;
+    document.querySelectorAll('.chat-filter-btn').forEach(btn => btn.classList.remove('active'));
+    document.getElementById(`filter-btn-${filterType}`).classList.add('active');
+    updateRoomState();
+  }
+
+  function setupActionPanel(status, myInfo, players) {
+    const panel = document.getElementById('action-panel');
+    const select = document.getElementById('action-target-select');
+    const title = document.getElementById('action-title');
+
+    if (!myInfo.isAlive || status === 'LOBBY' || status === 'FINISHED' || status === 'FIRST_NIGHT') {
+      panel.style.display = 'none';
+      return;
+    }
+
+    let targets = [];
+    let show = false;
+
+    if (status === 'VOTE') {
+      title.innerText = '追放先投票';
+      targets = players.filter(p => p.isAlive && p.name !== currentUser);
+      show = true;
+    } else if (status === 'NIGHT') {
+      if (myInfo.role === '人狼') {
+        title.innerText = '襲撃対象の選択';
+        targets = players.filter(p => p.isAlive && p.role !== '人狼');
+        show = true;
+      } else if (myInfo.role === '占い師') {
+        title.innerText = '占う対象の選択';
+        targets = players.filter(p => p.isAlive && p.name !== currentUser);
+        show = true;
+      } else if (myInfo.role === '狩人') {
+        title.innerText = '護衛対象の選択';
+        targets = players.filter(p => p.isAlive && p.name !== currentUser);
+        show = true;
+      }
+    }
+
+    if (show && targets.length > 0) {
+      panel.style.display = 'block';
+      let currentChoice = (status === 'VOTE') ? myInfo.voteTarget : myInfo.actionTarget;
+      let optHtml = '<option value="">-- 対象を選択 --</option>';
+      targets.forEach(t => {
+        let sel = (t.name === currentChoice) ? 'selected' : '';
+        optHtml += `<option value="${t.name}" ${sel}>${t.name}</option>`;
+      });
+      select.innerHTML = optHtml;
+    } else {
+      panel.style.display = 'none';
+    }
+  }
+
+  function submitAction() {
+    const target = document.getElementById('action-target-select').value;
+    if (!target) return alert("対象を選択してください");
+
+    google.script.run.withSuccessHandler(res => {
+      if (res.success) alert("決定しました！");
+    }).submitAction(currentRoomId, currentUser, target, (document.getElementById('action-title').innerText.includes('投票') ? 'VOTE' : 'NIGHT'));
+  }
+
+  function startGame() {
+    if (!isHost) return;
+    if (!confirm("ゲームを開始しますか？")) return;
+
+    google.script.run.withSuccessHandler(res => {
+      if (!res.success) alert(res.message);
+      else updateRoomState();
+    }).startGame(currentRoomId);
+  }
+
+  function advancePhase() {
+    google.script.run.withSuccessHandler(res => {
+      isAdvancingPhase = false;
+      if (res && res.success) updateRoomState();
+    }).advancePhase(currentRoomId);
+  }
+
+  function resetRoomToLobby() {
+    if (!isHost) return;
+    if (!confirm("全員を待機ロビーに戻して、もう一度ゲームを開始できるようにしますか？")) return;
+
+    google.script.run.withSuccessHandler(res => {
+      if (res.success) updateRoomState();
+      else alert(res.message);
+    }).resetRoomToLobby(currentRoomId);
+  }
+
+  function calcRoleTotal() {
+    const inputs = document.querySelectorAll('.role-input');
+    let total = 0;
+    inputs.forEach(inp => total += parseInt(inp.value || 0));
+    document.getElementById('role-total-count').innerText = total;
+
+    if (isHost) {
+      saveSettings();
+    }
+  }
+
+  function saveSettings() {
+    if (!isHost || !currentRoomId) return;
+    const settings = {
+      dayTime: document.getElementById('setting-day-time').value,
+      voteTime: document.getElementById('setting-vote-time').value,
+      nightTime: document.getElementById('setting-night-time').value,
+      tieRule: document.getElementById('setting-tie-rule').value,
+      roles: {
+        villager: parseInt(document.getElementById('role-villager').value || 0),
+        seer: parseInt(document.getElementById('role-seer').value || 0),
+        medium: parseInt(document.getElementById('role-medium').value || 0),
+        bodyguard: parseInt(document.getElementById('role-bodyguard').value || 0),
+        madman: parseInt(document.getElementById('role-madman').value || 0),
+        werewolf: parseInt(document.getElementById('role-werewolf').value || 0),
+        fox: parseInt(document.getElementById('role-fox').value || 0)
+      }
+    };
+
+    google.script.run.updateRoomSettings(currentRoomId, settings);
+  }
+
+  function kickPlayer(targetName) {
+    if (!confirm(`${targetName}さんを退出させますか？`)) return;
+    google.script.run.withSuccessHandler(res => {
+      if (res.success) updateRoomState();
+      else alert(res.message || "キックに失敗しました");
+    }).kickPlayer(currentRoomId, targetName);
+  }
+
+  function exitRoom() {
+    if (!confirm("部屋から退出しますか？")) return;
+    stopPolling();
+    google.script.run.withSuccessHandler(() => {
+      currentRoomId = "";
+      switchScreen('lobby-screen');
+      loadRoomList();
+    }).leaveRoom(currentRoomId, currentUser);
+  }
+
+  function sendChat() {
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    const channel = document.getElementById('chat-channel-select').value;
+    input.value = "";
+    
+    sendingMessages.push(msg);
+    updateRoomState();
+    google.script.run.withSuccessHandler(res => {
+      sendingMessages = sendingMessages.filter(m => m !== msg);
+      if (res && !res.success && res.message) {
+        alert(res.message);
+      }
+      updateRoomState();
+    }).sendChatMessage(currentRoomId, currentUser, msg, channel);
+  }
+</script>
