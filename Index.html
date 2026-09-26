@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title>人狼オンライン</title>
+  <?!= HtmlService.createHtmlOutputFromFile('Style').getContent(); ?>
+</head>
+<body>
+
+  <!-- 1. 名前入力画面 -->
+  <div id="auth-screen" class="screen active">
+    <div class="glass-panel" style="width: 320px; text-align: center; margin: auto;">
+      <h2>人狼オンライン</h2>
+      <p style="font-size: 0.85em; color: #555; margin: 10px 0 15px 0;">表示名を入力してスタートしてください</p>
+      
+      <input type="text" id="username-input" placeholder="名前を入力（例: Svartの黙示録）" style="width: 90%; margin-bottom: 15px;" onkeypress="if(event.key==='Enter') enterLobby()">
+      <button onclick="enterLobby()" style="width: 90%;">ゲームを始める</button>
+    </div>
+  </div>
+
+  <!-- 2. ロビー（部屋選択）画面 -->
+  <div id="lobby-screen" class="screen">
+    <div class="glass-panel" style="width: 90%; max-width: 600px; margin: auto; text-align: center;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,0,0,0.1); padding-bottom: 8px;">
+        <span>プレイヤー: <strong id="display-name">-</strong> さん</span>
+        <button onclick="loadRoomList()" style="font-size: 0.8em; padding: 4px 8px;">部屋一覧更新</button>
+      </div>
+
+      <h3 style="margin-top: 15px;">部屋を作成 / 参加</h3>
+      
+      <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px;">
+        <input type="text" id="new-room-name" placeholder="新しい部屋の名前" style="flex: 1;">
+        <button onclick="createRoom()">部屋を作る</button>
+      </div>
+
+      <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 20px;">
+        <input type="text" id="join-room-id" placeholder="4桁の部屋ID" maxlength="4" style="width: 100px;">
+        <button onclick="joinRoomById()" style="background: #28a745;">IDで入室</button>
+      </div>
+
+      <h4>公開部屋一覧</h4>
+      <div id="room-list" style="max-height: 250px; overflow-y: auto; background: rgba(255,255,255,0.4); border-radius: 8px; padding: 8px;">
+        <!-- JSで部屋一覧が読み込まれます -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. メインゲーム画面 -->
+  <div id="game-screen" class="screen">
+    <header class="glass-panel" style="margin-bottom: 0;">
+      <div>
+        <strong id="header-room-name">部屋名</strong>
+        <span style="font-size: 0.8em; opacity: 0.8;">(ID: <span id="header-room-id">----</span>)</span>
+      </div>
+      <div>
+        <span id="header-phase-info" style="font-weight: bold; font-size: 1.1em; color: #0066cc;">待機中</span>
+        <button id="advance-phase-btn" onclick="advancePhase()" style="display:none; margin-left:10px; background:#fd7e14; font-size:0.8em;">進行 ►</button>
+        <button id="reset-lobby-btn" onclick="resetRoomToLobby()" style="display:none; margin-left:10px; background:#28a745; font-size:0.8em;">もう一度遊ぶ（ロビーへ）</button>
+      </div>
+      <div>
+        <button onclick="exitRoom()" class="danger" style="font-size: 0.8em;">退出</button>
+      </div>
+    </header>
+
+    <div class="room-container">
+      <!-- 左側：状況＆設定パネル -->
+      <div class="left-section">
+        
+        <!-- 自分の役職表示カード -->
+        <div id="my-role-card" class="glass-panel" style="display:none; text-align: center; background: rgba(255,255,255,0.85);">
+          <div style="font-size: 0.8em; color: #666;">あなたの役職</div>
+          <div id="my-role-title" style="font-size: 1.3em; font-weight: bold; color: #d9534f; margin: 4px 0;">-</div>
+          <div id="my-status-tag" style="font-size: 0.85em;">-</div>
+        </div>
+
+        <!-- 夜の行動・投票パネル -->
+        <div id="action-panel" class="glass-panel" style="display:none;">
+          <h4 id="action-title" style="margin: 0 0 8px 0; font-size: 0.9em; text-align: center;">対象を選択</h4>
+          <select id="action-target-select" style="width: 100%; margin-bottom: 8px;">
+            <!-- JSで選択肢を追加 -->
+          </select>
+          <button onclick="submitAction()" style="width: 100%; font-size: 0.85em;">決定</button>
+        </div>
+
+        <!-- ロビー設定＆役職設定パネル -->
+        <div id="lobby-settings-panel" class="glass-panel">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h4 style="margin:0;">ゲーム設定</h4>
+            <span id="host-badge" style="font-size:0.75em; background:#0066cc; color:white; padding:2px 6px; border-radius:4px; display:none;">部屋主</span>
+          </div>
+
+          <div class="setting-group" style="margin-top: 8px;">
+            <label>昼議論(分): <input type="number" id="setting-day-time" value="4" min="1" max="10" style="width:45px;" onchange="saveSettings()"></label><br>
+            <label>投票時間(分): <input type="number" id="setting-vote-time" value="1" min="1" max="5" style="width:45px;" onchange="saveSettings()"></label><br>
+            <label>夜行動(分): <input type="number" id="setting-night-time" value="1" min="1" max="5" style="width:45px;" onchange="saveSettings()"></label>
+          </div>
+
+          <div class="setting-group">
+            <label>同数票の処理: 
+              <select id="setting-tie-rule" onchange="saveSettings()">
+                <option value="random">ランダム追放</option>
+                <option value="none">追放なし</option>
+              </select>
+            </label>
+          </div>
+
+          <div style="font-weight:bold; font-size:0.85em; margin: 8px 0 4px 0;">
+            役職設定 (合計: <span id="role-total-count">3</span>人)
+          </div>
+          <div class="setting-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:4px;">
+            <label>村人: <input type="number" id="role-villager" class="role-input" value="2" min="0" style="width:40px;" oninput="calcRoleTotal()"></label>
+            <label>人狼: <input type="number" id="role-werewolf" class="role-input" value="1" min="0" style="width:40px;" oninput="calcRoleTotal()"></label>
+            <label>占い師: <input type="number" id="role-seer" class="role-input" value="0" min="0" style="width:40px;" oninput="calcRoleTotal()"></label>
+            <label>霊媒師: <input type="number" id="role-medium" class="role-input" value="0" min="0" style="width:40px;" oninput="calcRoleTotal()"></label>
+            <label>狩人: <input type="number" id="role-bodyguard" class="role-input" value="0" min="0" style="width:40px;" oninput="calcRoleTotal()"></label>
+            <label>狂人: <input type="number" id="role-madman" class="role-input" value="0" min="0" style="width:40px;" oninput="calcRoleTotal()"></label>
+            <label>妖狐: <input type="number" id="role-fox" class="role-input" value="0" min="0" style="width:40px;" oninput="calcRoleTotal()"></label>
+          </div>
+
+          <button id="start-game-btn" onclick="startGame()" style="width:100%; margin-top:8px; background:#28a745; display:none;">ゲーム開始！</button>
+        </div>
+
+        <!-- 参加者一覧 -->
+        <div class="glass-panel" style="flex: 1;">
+          <h4 style="margin: 0 0 8px 0; font-size: 0.9em;">参加者 (<span id="player-count">0</span>名)</h4>
+          <div id="player-list-box" style="display: flex; flex-direction: column; gap: 4px; font-size: 0.85em;">
+            <!-- JSでプレイヤー情報が入ります -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 右側：チャットエリア -->
+      <div class="right-section glass-panel">
+        <div style="font-weight: bold; font-size: 0.9em; margin-bottom: 6px;">チャットログ</div>
+
+        <!-- ログフィルタータブ -->
+        <div class="chat-filter-tabs">
+          <button id="filter-btn-ALL" class="chat-filter-btn active" onclick="setChatFilter('ALL')">すべて</button>
+          <button id="filter-btn-CHAT" class="chat-filter-btn" onclick="setChatFilter('CHAT')">全体</button>
+          <button id="filter-btn-WOLF" class="chat-filter-btn" onclick="setChatFilter('WOLF')">人狼</button>
+          <button id="filter-btn-GRAVE" class="chat-filter-btn" onclick="setChatFilter('GRAVE')">霊界</button>
+          <button id="filter-btn-SOLILOQUY" class="chat-filter-btn" onclick="setChatFilter('SOLILOQUY')">独り言</button>
+          <button id="filter-btn-SYSTEM" class="chat-filter-btn" onclick="setChatFilter('SYSTEM')">システム</button>
+        </div>
+
+        <div id="chat-box" class="chat-box">
+          <!-- メッセージがここに追加されます -->
+        </div>
+
+        <!-- 個別送信先＆入力エリア -->
+        <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 0.8em; font-weight: bold; white-space: nowrap;">送信先:</span>
+            <select id="chat-channel-select" style="flex: 1; font-size: 0.85em; padding: 4px; border-radius: 4px;">
+              <!-- JSで動的変化 -->
+            </select>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <input type="text" id="chat-input" placeholder="メッセージを入力..." style="flex: 1;" onkeypress="if(event.key==='Enter') sendChat()">
+            <button id="send-chat-btn" onclick="sendChat()">送信</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <?!= HtmlService.createHtmlOutputFromFile('Script').getContent(); ?>
+</body>
+</html>
