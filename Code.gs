@@ -143,17 +143,19 @@ function getRoomDetails(roomId, username) {
 
     // チャットのアクセス権限フィルター
     const filteredLogs = (room.logs || []).filter(l => {
+      if (room.status === 'FINISHED') return true; // 終了後は全ログ閲覧可能
+
       if (l.type === 'WOLF') {
-        return myInfo.role === '人狼' || isDead || room.status === 'FINISHED';
+        return myInfo.role === '人狼' || isDead;
       }
       if (l.type === 'GRAVE') {
-        return isDead || room.status === 'FINISHED';
+        return isDead;
       }
       if (l.type === 'SOLILOQUY') {
         return l.sender === username;
       }
       if (l.type === 'PRIVATE') {
-        return l.sender === username || room.status === 'FINISHED';
+        return l.sender === username;
       }
       return true;
     });
@@ -279,7 +281,10 @@ function sendChatMessage(roomId, username, message, chatType = 'AUTO') {
     const p = room.players[username] || { isAlive: true, role: "" };
     let type = 'CHAT';
 
-    if (chatType === 'SOLILOQUY') {
+    // ゲーム終了後は全員全体チャット可
+    if (room.status === 'FINISHED') {
+      type = 'CHAT';
+    } else if (chatType === 'SOLILOQUY') {
       type = 'SOLILOQUY';
     } else if (!p.isAlive) {
       type = 'GRAVE';
@@ -358,14 +363,18 @@ function startGame(roomId) {
     addLog(room, 'SYSTEM', '=== ゲームを開始しました ===');
     addLog(room, 'SYSTEM', `1日目【初日夜】になりました。人狼は襲撃できません。(${room.nightTime}分)`);
 
+    // 初日占い：人狼と妖狐以外を自動対象にする
     Object.keys(room.players).forEach(pName => {
       if (room.players[pName].role === '占い師') {
-        const nonWolves = Object.keys(room.players).filter(name => name !== pName && room.players[name].role !== '人狼');
-        const candidates = nonWolves.length > 0 ? nonWolves : Object.keys(room.players).filter(name => name !== pName);
+        const validTargets = Object.keys(room.players).filter(name =>
+          name !== pName &&
+          room.players[name].role !== '人狼' &&
+          room.players[name].role !== '妖狐'
+        );
         
-        if (candidates.length > 0) {
-          const target = candidates[Math.floor(Math.random() * candidates.length)];
-          addLog(room, 'PRIVATE', `[初日ランダム占い] ${target} さんは 【人間】 です`, pName);
+        if (validTargets.length > 0) {
+          const target = validTargets[Math.floor(Math.random() * validTargets.length)];
+          addLog(room, 'PRIVATE', `1日目 占い結果：${target} さんは 【人間】 でした`, pName);
         }
       }
     });
@@ -436,10 +445,28 @@ function submitAction(roomId, username, target, actionType) {
     const room = rooms[roomId];
     if (!room || !room.players[username]) return { success: false };
 
+    const p = room.players[username];
+
     if (actionType === 'VOTE') {
-      room.players[username].voteTarget = target;
+      const isFirstVote = !p.voteTarget;
+      p.voteTarget = target;
+
+      let votedCount = 0;
+      let totalAlive = 0;
+      Object.keys(room.players).forEach(name => {
+        if (room.players[name].isAlive) {
+          totalAlive++;
+          if (room.players[name].voteTarget) votedCount++;
+        }
+      });
+
+      if (isFirstVote) {
+        addLog(room, 'SYSTEM', `${username} さんが投票しました (${votedCount}/${totalAlive})`);
+      } else {
+        addLog(room, 'SYSTEM', `${username} さんが投票先を変更しました (${votedCount}/${totalAlive})`);
+      }
     } else if (actionType === 'NIGHT') {
-      room.players[username].actionTarget = target;
+      p.actionTarget = target;
     }
 
     saveRoomsData(rooms);
@@ -451,12 +478,21 @@ function submitAction(roomId, username, target, actionType) {
 
 function resolveVote(room) {
   const votes = {};
+  let voteDetailsLog = "【投票内訳】\n";
+
   Object.keys(room.players).forEach(pName => {
     const p = room.players[pName];
-    if (p.isAlive && p.voteTarget) {
-      votes[p.voteTarget] = (votes[p.voteTarget] || 0) + 1;
+    if (p.isAlive) {
+      if (p.voteTarget) {
+        votes[p.voteTarget] = (votes[p.voteTarget] || 0) + 1;
+        voteDetailsLog += `・${pName} → ${p.voteTarget}\n`;
+      } else {
+        voteDetailsLog += `・${pName} → (未投票)\n`;
+      }
     }
   });
+
+  addLog(room, 'SYSTEM', voteDetailsLog.trim());
 
   let maxVotes = 0;
   let executed = [];
@@ -475,14 +511,14 @@ function resolveVote(room) {
     if (room.tieRule === 'random') {
       const chosen = executed[Math.floor(Math.random() * executed.length)];
       room.players[chosen].isAlive = false;
-      addLog(room, 'SYSTEM', `得票数が同数のため、抽選で ${chosen} さんが追放されました`);
+      addLog(room, 'SYSTEM', `得票数が同数(${maxVotes}票)のため、抽選で ${chosen} さんが追放されました`);
     } else {
-      addLog(room, 'SYSTEM', '得票数が同数のため、本日の追放はありませんでした');
+      addLog(room, 'SYSTEM', `得票数が同数(${maxVotes}票)のため、本日の追放はありませんでした`);
     }
   } else {
     const chosen = executed[0];
     room.players[chosen].isAlive = false;
-    addLog(room, 'SYSTEM', `投票の結果、${chosen} さんが追放されました`);
+    addLog(room, 'SYSTEM', `投票の結果(${maxVotes}票)、${chosen} さんが追放されました`);
   }
 
   Object.keys(room.players).forEach(pName => room.players[pName].voteTarget = "");
@@ -501,8 +537,8 @@ function resolveNight(room) {
 
     if (p.role === '占い師' && p.actionTarget) {
       const targetP = room.players[p.actionTarget];
-      const isWolf = targetP ? (targetP.role === '人狼' ? '【人狼】' : '【人間】') : '不明';
-      addLog(room, 'PRIVATE', `[占い結果] ${p.actionTarget} さんは ${isWolf} です`, pName);
+      const resultText = targetP ? (targetP.role === '人狼' ? '【人狼】' : '【人間】') : '不明';
+      addLog(room, 'PRIVATE', `${room.day}日目 占い結果：${p.actionTarget} さんは ${resultText} でした`, pName);
 
       if (targetP && targetP.role === '妖狐') {
         targetP.isAlive = false;
@@ -539,7 +575,7 @@ function checkWinCondition(room) {
     if (p.isAlive) {
       if (p.role === '人狼') wolfCount++;
       else if (p.role === '妖狐') foxCount++;
-      else humanCount++;
+      else humanCount++; // 村人・占い・霊媒・狩人・狂人は人間カウント
     }
   });
 
@@ -547,7 +583,7 @@ function checkWinCondition(room) {
 
   if (wolfCount === 0) {
     winner = (foxCount > 0) ? '妖狐陣営' : '村人陣営';
-  } else if (wolfCount >= (humanCount + foxCount)) {
+  } else if (wolfCount >= humanCount) {
     winner = (foxCount > 0) ? '妖狐陣営' : '人狼陣営';
   }
 
