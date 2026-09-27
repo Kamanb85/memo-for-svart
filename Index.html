@@ -74,15 +74,6 @@
           <div id="my-status-tag" style="font-size: 0.85em;">-</div>
         </div>
 
-        <!-- 夜の行動・投票パネル -->
-        <div id="action-panel" class="glass-panel" style="display:none;">
-          <h4 id="action-title" style="margin: 0 0 8px 0; font-size: 0.9em; text-align: center;">対象を選択</h4>
-          <select id="action-target-select" style="width: 100%; margin-bottom: 8px;">
-            <!-- JSで選択肢を追加 -->
-          </select>
-          <button onclick="submitAction()" style="width: 100%; font-size: 0.85em;">決定</button>
-        </div>
-
         <!-- ロビー設定＆役職設定パネル -->
         <div id="lobby-settings-panel" class="glass-panel">
           <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -126,6 +117,18 @@
           <h4 style="margin: 0 0 8px 0; font-size: 0.9em;">参加者 (<span id="player-count">0</span>名)</h4>
           <div id="player-list-box" style="display: flex; flex-direction: column; gap: 4px; font-size: 0.85em;">
             <!-- JSでプレイヤー情報が入ります -->
+          </div>
+        </div>
+
+        <!-- ゲーム役職・行動記録パネル -->
+        <div id="game-record-panel" class="glass-panel" style="display:none; font-size: 0.8em;">
+          <h4 style="margin: 0 0 6px 0; font-size: 0.9em;">ゲーム情報 & 記録</h4>
+          <div id="role-breakdown-info" style="color: #444; margin-bottom: 8px; background: rgba(255,255,255,0.5); padding: 6px; border-radius: 4px;">
+            <!-- 役職内訳 -->
+          </div>
+          <div style="font-weight: bold; margin-bottom: 4px;">行動・判定の記録:</div>
+          <div id="personal-action-logs" style="max-height: 120px; overflow-y: auto; background: rgba(255,255,255,0.5); padding: 6px; border-radius: 4px;">
+            <!-- 個人記録 -->
           </div>
         </div>
 
