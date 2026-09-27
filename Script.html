@@ -161,7 +161,7 @@
           document.getElementById('my-role-title').innerText = myInfo.role;
           document.getElementById('my-status-tag').innerHTML = myInfo.isAlive 
             ? '<span style="color:green; font-weight:bold;">[生存]</span>' 
-            : '<span style="color:red; font-weight:bold;">[死亡 (霊界可視化中)]</span>';
+            : '<span style="color:red; font-weight:bold;">[死亡]</span>';
         } else {
           roleCard.style.display = 'none';
         }
@@ -194,14 +194,41 @@
           document.getElementById('lobby-settings-panel').style.display = 'none';
         }
 
-        setupActionPanel(room.status, myInfo, players);
+        // ゲーム情報・記録パネル
+        if (room.status !== 'LOBBY' && room.roles) {
+          document.getElementById('game-record-panel').style.display = 'block';
+          const roleNames = {
+            villager: '村人', werewolf: '人狼', seer: '占い師',
+            medium: '霊媒師', bodyguard: '狩人', madman: '狂人', fox: '妖狐'
+          };
+          let rList = [];
+          for (let k in room.roles) {
+            if (room.roles[k] > 0) {
+              rList.push(`${roleNames[k] || k} - ${room.roles[k]}人`);
+            }
+          }
+          document.getElementById('role-breakdown-info').innerText = rList.join(' / ');
 
-        // 送信先プルダウン制御
+          let pLogsHtml = '';
+          if (logs && logs.length > 0) {
+            logs.filter(l => l.type === 'PRIVATE').forEach(l => {
+              pLogsHtml += `<div style="margin-bottom: 3px; font-size: 0.8em; color: #d9534f;">• ${l.msg}</div>`;
+            });
+          }
+          if (!pLogsHtml) pLogsHtml = '<span style="color:#888;">記録はありません</span>';
+          document.getElementById('personal-action-logs').innerHTML = pLogsHtml;
+        } else {
+          document.getElementById('game-record-panel').style.display = 'none';
+        }
+
+        // 送信先プルダウン制御（ゲーム終了時は全員全体会話が可能）
         const channelSelect = document.getElementById('chat-channel-select');
         const prevChan = channelSelect.value;
         let chanHtml = '';
 
-        if (!myInfo.isAlive) {
+        if (room.status === 'FINISHED') {
+          chanHtml += '<option value="CHAT">💬 全体会話</option>';
+        } else if (!myInfo.isAlive) {
           chanHtml += '<option value="GRAVE">👻 霊界会話</option>';
         } else if (room.status === 'NIGHT' || room.status === 'FIRST_NIGHT') {
           if (myInfo.role === '人狼') {
@@ -219,23 +246,56 @@
           channelSelect.value = prevChan;
         }
 
-        // 参加者一覧
+        // 参加者一覧＆アクションボタン（ワンタップ操作）
         document.getElementById('player-count').innerText = players.length;
         let playerHtml = '';
         players.forEach(p => {
           let statusStr = p.isAlive ? '<span style="color:green;">[生]</span>' : '<span style="color:gray;">[死]</span>';
           let roleTag = p.role ? ` <span style="font-size:0.8em; color:#d9534f; font-weight:bold;">(${p.role})</span>` : '';
+          let hostTag = (p.name === room.host) ? ' <span style="font-size:0.75em; color:#0066cc;">[主]</span>' : '';
+
+          let actionBtnHtml = '';
+
+          // 自分の行動ボタン（時間・役職に応じて自動生成）
+          if (myInfo.isAlive && room.status !== 'LOBBY' && room.status !== 'FINISHED') {
+            if (room.status === 'VOTE' && p.isAlive && p.name !== currentUser) {
+              const isSelected = (myInfo.voteTarget === p.name);
+              const btnText = isSelected ? '✓ 投票中' : '投票';
+              const btnClass = isSelected ? 'action-btn selected' : 'action-btn';
+              actionBtnHtml = `<button onclick="doAction('${p.name}', 'VOTE')" class="${btnClass}">${btnText}</button>`;
+            } else if (room.status === 'NIGHT' && p.isAlive) {
+              if (myInfo.role === '占い師' && p.name !== currentUser) {
+                const isSelected = (myInfo.actionTarget === p.name);
+                const btnText = isSelected ? '✓ 占い選択' : '占う';
+                const btnClass = isSelected ? 'action-btn selected' : 'action-btn';
+                actionBtnHtml = `<button onclick="doAction('${p.name}', 'NIGHT')" class="${btnClass}">${btnText}</button>`;
+              } else if (myInfo.role === '人狼' && p.role !== '人狼') {
+                const isSelected = (myInfo.actionTarget === p.name);
+                const btnText = isSelected ? '✓ 襲撃選択' : '襲撃';
+                const btnClass = isSelected ? 'action-btn selected' : 'action-btn danger';
+                actionBtnHtml = `<button onclick="doAction('${p.name}', 'NIGHT')" class="${btnClass}">${btnText}</button>`;
+              } else if (myInfo.role === '狩人' && p.name !== currentUser) {
+                const isSelected = (myInfo.actionTarget === p.name);
+                const btnText = isSelected ? '✓ 護衛選択' : '護衛';
+                const btnClass = isSelected ? 'action-btn selected' : 'action-btn';
+                actionBtnHtml = `<button onclick="doAction('${p.name}', 'NIGHT')" class="${btnClass}">${btnText}</button>`;
+              }
+            }
+          }
+
           let kickBtn = (isHost && p.name !== currentUser && room.status === 'LOBBY') 
             ? `<button onclick="kickPlayer('${p.name}')" class="danger" style="padding: 2px 6px; font-size: 0.75em;">キック</button>` 
             : '';
-          let hostTag = (p.name === room.host) ? ' <span style="font-size:0.75em; color:#0066cc;">[主]</span>' : '';
 
           playerHtml += `
             <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.7); padding: 6px 10px; border-radius: 6px;">
               <div>
                 ${statusStr} <strong>${p.name}</strong>${hostTag}${roleTag}
               </div>
-              <div>${kickBtn}</div>
+              <div style="display: flex; gap: 4px; align-items: center;">
+                ${actionBtnHtml}
+                ${kickBtn}
+              </div>
             </div>
           `;
         });
@@ -278,11 +338,14 @@
               typeBadge = '<span class="badge badge-chat">全体</span> ';
             }
 
+            // 改行を判定して表示
+            let formattedMsg = l.msg.replace(/\n/g, '<br>');
+
             chatHtml += `
               <div class="chat-msg ${msgClass} ${isMe ? 'my-msg' : ''}">
                 <span style="font-size: 0.75em; opacity: 0.8;">[${l.time}]</span> 
                 ${typeBadge}
-                <strong>${isMe ? '' : l.sender + ':'}</strong> ${l.msg}
+                <strong>${isMe ? '' : l.sender + ':'}</strong> ${formattedMsg}
               </div>
             `;
           });
@@ -304,67 +367,17 @@
       }).getRoomDetails(currentRoomId, currentUser);
   }
 
+  function doAction(targetName, actionType) {
+    google.script.run.withSuccessHandler(res => {
+      if (res.success) updateRoomState();
+    }).submitAction(currentRoomId, currentUser, targetName, actionType);
+  }
+
   function setChatFilter(filterType) {
     currentChatFilter = filterType;
     document.querySelectorAll('.chat-filter-btn').forEach(btn => btn.classList.remove('active'));
     document.getElementById(`filter-btn-${filterType}`).classList.add('active');
     updateRoomState();
-  }
-
-  function setupActionPanel(status, myInfo, players) {
-    const panel = document.getElementById('action-panel');
-    const select = document.getElementById('action-target-select');
-    const title = document.getElementById('action-title');
-
-    if (!myInfo.isAlive || status === 'LOBBY' || status === 'FINISHED' || status === 'FIRST_NIGHT') {
-      panel.style.display = 'none';
-      return;
-    }
-
-    let targets = [];
-    let show = false;
-
-    if (status === 'VOTE') {
-      title.innerText = '追放先投票';
-      targets = players.filter(p => p.isAlive && p.name !== currentUser);
-      show = true;
-    } else if (status === 'NIGHT') {
-      if (myInfo.role === '人狼') {
-        title.innerText = '襲撃対象の選択';
-        targets = players.filter(p => p.isAlive && p.role !== '人狼');
-        show = true;
-      } else if (myInfo.role === '占い師') {
-        title.innerText = '占う対象の選択';
-        targets = players.filter(p => p.isAlive && p.name !== currentUser);
-        show = true;
-      } else if (myInfo.role === '狩人') {
-        title.innerText = '護衛対象の選択';
-        targets = players.filter(p => p.isAlive && p.name !== currentUser);
-        show = true;
-      }
-    }
-
-    if (show && targets.length > 0) {
-      panel.style.display = 'block';
-      let currentChoice = (status === 'VOTE') ? myInfo.voteTarget : myInfo.actionTarget;
-      let optHtml = '<option value="">-- 対象を選択 --</option>';
-      targets.forEach(t => {
-        let sel = (t.name === currentChoice) ? 'selected' : '';
-        optHtml += `<option value="${t.name}" ${sel}>${t.name}</option>`;
-      });
-      select.innerHTML = optHtml;
-    } else {
-      panel.style.display = 'none';
-    }
-  }
-
-  function submitAction() {
-    const target = document.getElementById('action-target-select').value;
-    if (!target) return alert("対象を選択してください");
-
-    google.script.run.withSuccessHandler(res => {
-      if (res.success) alert("決定しました！");
-    }).submitAction(currentRoomId, currentUser, target, (document.getElementById('action-title').innerText.includes('投票') ? 'VOTE' : 'NIGHT'));
   }
 
   function startGame() {
@@ -454,6 +467,7 @@
     
     sendingMessages.push(msg);
     updateRoomState();
+
     google.script.run.withSuccessHandler(res => {
       sendingMessages = sendingMessages.filter(m => m !== msg);
       if (res && !res.success && res.message) {
