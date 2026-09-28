@@ -14,7 +14,7 @@
       <h2>人狼オンライン</h2>
       <p style="font-size: 0.85em; color: #555; margin: 10px 0 15px 0;">表示名を入力してスタートしてください</p>
       
-      <input type="text" id="username-input" placeholder="名前を入力（例: Svartの黙示録）" style="width: 90%; margin-bottom: 15px;" onkeypress="if(event.key==='Enter') enterLobby()">
+      <input type="text" id="username-input" placeholder="名前を入力" style="width: 90%; margin-bottom: 15px;" onkeypress="if(event.key==='Enter') enterLobby()">
       <button onclick="enterLobby()" style="width: 90%;">ゲームを始める</button>
     </div>
   </div>
@@ -63,9 +63,15 @@
       </div>
     </header>
 
+    <!-- スマホ専用タブ表示ヘッダー -->
+    <div class="mobile-tabs">
+      <button id="tab-btn-left" class="mobile-tab-btn active" onclick="switchMobileTab('left')">状況・操作</button>
+      <button id="tab-btn-right" class="mobile-tab-btn" onclick="switchMobileTab('right')">チャット</button>
+    </div>
+
     <div class="room-container">
       <!-- 左側：状況＆設定パネル -->
-      <div class="left-section">
+      <div id="left-section-panel" class="left-section">
         
         <!-- 自分の役職表示カード -->
         <div id="my-role-card" class="glass-panel" style="display:none; text-align: center; background: rgba(255,255,255,0.85);">
@@ -135,7 +141,7 @@
       </div>
 
       <!-- 右側：チャットエリア -->
-      <div class="right-section glass-panel">
+      <div id="right-section-panel" class="right-section glass-panel mobile-hidden">
         <div style="font-weight: bold; font-size: 0.9em; margin-bottom: 6px;">チャットログ</div>
 
         <!-- ログフィルタータブ -->
