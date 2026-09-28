@@ -7,11 +7,61 @@
   let isAdvancingPhase = false; 
   let sendingMessages = []; 
   let currentChatFilter = 'ALL';
+  let previousPhase = "";
+  let lastSoundSec = -1;
+
+  // 簡素な鐘の音（Web Audio APIによるチャイム効果音）
+  function playBellSound() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, now); // A5 (880Hz)
+      osc.frequency.exponentialRampToValueAtTime(440, now + 1.2);
+
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 1.2);
+    } catch(e) {
+      console.log("Audio play prevented:", e);
+    }
+  }
 
   function switchScreen(screenId) {
     const screens = document.querySelectorAll('.screen');
     screens.forEach(screen => screen.classList.remove('active'));
     document.getElementById(screenId).classList.add('active');
+  }
+
+  // スマホ用タブ切り替え
+  function switchMobileTab(tab) {
+    const leftSec = document.getElementById('left-section-panel');
+    const rightSec = document.getElementById('right-section-panel');
+    const btnLeft = document.getElementById('tab-btn-left');
+    const btnRight = document.getElementById('tab-btn-right');
+
+    if (tab === 'left') {
+      leftSec.classList.remove('mobile-hidden');
+      rightSec.classList.add('mobile-hidden');
+      btnLeft.classList.add('active');
+      btnRight.classList.remove('active');
+    } else {
+      leftSec.classList.add('mobile-hidden');
+      rightSec.classList.remove('mobile-hidden');
+      btnLeft.classList.remove('active');
+      btnRight.classList.add('active');
+    }
   }
 
   function enterLobby() {
@@ -115,6 +165,16 @@
 
         isHost = (room.host === currentUser);
 
+        // 朝（DAY）に移行した際は自動で送信先を全体にリセット
+        if (previousPhase !== room.status) {
+          if (room.status === 'DAY') {
+            const channelSelect = document.getElementById('chat-channel-select');
+            if (channelSelect) channelSelect.value = 'CHAT';
+          }
+          lastSoundSec = -1; // フェーズが変わったらサウンド用フラグを初期化
+        }
+        previousPhase = room.status;
+
         if (room.status === 'NIGHT' || room.status === 'FIRST_NIGHT') {
           document.body.classList.add('night-mode');
         } else {
@@ -138,6 +198,12 @@
           const min = Math.floor(remainingSec / 60);
           const sec = remainingSec % 60;
           timerStr = ` [残り ${min}:${sec < 10 ? '0' : ''}${sec}]`;
+
+          // 30秒前・10秒前に鐘の音を鳴らす
+          if ((remainingSec === 30 || remainingSec === 10) && lastSoundSec !== remainingSec) {
+            playBellSound();
+            lastSoundSec = remainingSec;
+          }
 
           if (remainingSec === 0 && isHost && !isAdvancingPhase) {
             isAdvancingPhase = true;
@@ -221,7 +287,7 @@
           document.getElementById('game-record-panel').style.display = 'none';
         }
 
-        // 送信先プルダウン制御（ゲーム終了時は全員全体会話が可能）
+        // 送信先プルダウン制御
         const channelSelect = document.getElementById('chat-channel-select');
         const prevChan = channelSelect.value;
         let chanHtml = '';
@@ -256,7 +322,6 @@
 
           let actionBtnHtml = '';
 
-          // 自分の行動ボタン（時間・役職に応じて自動生成）
           if (myInfo.isAlive && room.status !== 'LOBBY' && room.status !== 'FINISHED') {
             if (room.status === 'VOTE' && p.isAlive && p.name !== currentUser) {
               const isSelected = (myInfo.voteTarget === p.name);
@@ -338,7 +403,6 @@
               typeBadge = '<span class="badge badge-chat">全体</span> ';
             }
 
-            // 改行を判定して表示
             let formattedMsg = l.msg.replace(/\n/g, '<br>');
 
             chatHtml += `
@@ -431,49 +495,4 @@
         medium: parseInt(document.getElementById('role-medium').value || 0),
         bodyguard: parseInt(document.getElementById('role-bodyguard').value || 0),
         madman: parseInt(document.getElementById('role-madman').value || 0),
-        werewolf: parseInt(document.getElementById('role-werewolf').value || 0),
-        fox: parseInt(document.getElementById('role-fox').value || 0)
-      }
-    };
-
-    google.script.run.updateRoomSettings(currentRoomId, settings);
-  }
-
-  function kickPlayer(targetName) {
-    if (!confirm(`${targetName}さんを退出させますか？`)) return;
-    google.script.run.withSuccessHandler(res => {
-      if (res.success) updateRoomState();
-      else alert(res.message || "キックに失敗しました");
-    }).kickPlayer(currentRoomId, targetName);
-  }
-
-  function exitRoom() {
-    if (!confirm("部屋から退出しますか？")) return;
-    stopPolling();
-    google.script.run.withSuccessHandler(() => {
-      currentRoomId = "";
-      switchScreen('lobby-screen');
-      loadRoomList();
-    }).leaveRoom(currentRoomId, currentUser);
-  }
-
-  function sendChat() {
-    const input = document.getElementById('chat-input');
-    const msg = input.value.trim();
-    if (!msg) return;
-
-    const channel = document.getElementById('chat-channel-select').value;
-    input.value = "";
-    
-    sendingMessages.push(msg);
-    updateRoomState();
-
-    google.script.run.withSuccessHandler(res => {
-      sendingMessages = sendingMessages.filter(m => m !== msg);
-      if (res && !res.success && res.message) {
-        alert(res.message);
-      }
-      updateRoomState();
-    }).sendChatMessage(currentRoomId, currentUser, msg, channel);
-  }
-</script>
+        werewolf: parseInt(document.g
