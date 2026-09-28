@@ -131,7 +131,6 @@ function getRoomDetails(roomId, username) {
     const myInfo = room.players[username] || { isAlive: true, role: "" };
     const isDead = (myInfo.isAlive === false);
 
-    // 霊界（死亡者）またはゲーム終了時は全員の役職を開示
     const players = room.members.map(name => {
       const p = room.players[name] || {};
       return {
@@ -141,9 +140,8 @@ function getRoomDetails(roomId, username) {
       };
     });
 
-    // チャットのアクセス権限フィルター
     const filteredLogs = (room.logs || []).filter(l => {
-      if (room.status === 'FINISHED') return true; // 終了後は全ログ閲覧可能
+      if (room.status === 'FINISHED') return true;
 
       if (l.type === 'WOLF') {
         return myInfo.role === '人狼' || isDead;
@@ -281,7 +279,6 @@ function sendChatMessage(roomId, username, message, chatType = 'AUTO') {
     const p = room.players[username] || { isAlive: true, role: "" };
     let type = 'CHAT';
 
-    // ゲーム終了後は全員全体チャット可
     if (room.status === 'FINISHED') {
       type = 'CHAT';
     } else if (chatType === 'SOLILOQUY') {
@@ -478,25 +475,21 @@ function submitAction(roomId, username, target, actionType) {
 
 function resolveVote(room) {
   const votes = {};
-  let voteDetailsLog = "【投票内訳】\n";
 
   Object.keys(room.players).forEach(pName => {
     const p = room.players[pName];
-    if (p.isAlive) {
-      if (p.voteTarget) {
-        votes[p.voteTarget] = (votes[p.voteTarget] || 0) + 1;
-        voteDetailsLog += `・${pName} → ${p.voteTarget}\n`;
-      } else {
-        voteDetailsLog += `・${pName} → (未投票)\n`;
-      }
+    if (p.isAlive && p.voteTarget) {
+      votes[p.voteTarget] = (votes[p.voteTarget] || 0) + 1;
     }
   });
 
-  addLog(room, 'SYSTEM', voteDetailsLog.trim());
-
+  // 投票内訳を秘匿し、候補ごとの得票数のみ表示
+  let voteSummaryLog = "【得票結果】\n";
   let maxVotes = 0;
   let executed = [];
+
   for (let target in votes) {
+    voteSummaryLog += `・${target}: ${votes[target]}票\n`;
     if (votes[target] > maxVotes) {
       maxVotes = votes[target];
       executed = [target];
@@ -505,20 +498,38 @@ function resolveVote(room) {
     }
   }
 
+  if (Object.keys(votes).length > 0) {
+    addLog(room, 'SYSTEM', voteSummaryLog.trim());
+  }
+
+  let executedPerson = null;
+
   if (executed.length === 0) {
     addLog(room, 'SYSTEM', '誰も投票しなかったため、追放者はありませんでした');
   } else if (executed.length > 1) {
     if (room.tieRule === 'random') {
-      const chosen = executed[Math.floor(Math.random() * executed.length)];
-      room.players[chosen].isAlive = false;
-      addLog(room, 'SYSTEM', `得票数が同数(${maxVotes}票)のため、抽選で ${chosen} さんが追放されました`);
+      executedPerson = executed[Math.floor(Math.random() * executed.length)];
+      room.players[executedPerson].isAlive = false;
+      addLog(room, 'SYSTEM', `得票数が同数(${maxVotes}票)のため、抽選で ${executedPerson} さんが追放されました`);
     } else {
       addLog(room, 'SYSTEM', `得票数が同数(${maxVotes}票)のため、本日の追放はありませんでした`);
     }
   } else {
-    const chosen = executed[0];
-    room.players[chosen].isAlive = false;
-    addLog(room, 'SYSTEM', `投票の結果(${maxVotes}票)、${chosen} さんが追放されました`);
+    executedPerson = executed[0];
+    room.players[executedPerson].isAlive = false;
+    addLog(room, 'SYSTEM', `投票の結果(${maxVotes}票)、${executedPerson} さんが追放されました`);
+  }
+
+  // 霊媒師への判定通知処理（処刑者がいた場合）
+  if (executedPerson) {
+    const targetRole = room.players[executedPerson].role;
+    const resultText = (targetRole === '人狼') ? '【人狼】' : '【人間】';
+    Object.keys(room.players).forEach(pName => {
+      const p = room.players[pName];
+      if (p.role === '霊媒師' && p.isAlive) {
+        addLog(room, 'PRIVATE', `${room.day}日目 霊媒結果：${executedPerson} さんは ${resultText} でした`, pName);
+      }
+    });
   }
 
   Object.keys(room.players).forEach(pName => room.players[pName].voteTarget = "");
@@ -575,7 +586,7 @@ function checkWinCondition(room) {
     if (p.isAlive) {
       if (p.role === '人狼') wolfCount++;
       else if (p.role === '妖狐') foxCount++;
-      else humanCount++; // 村人・占い・霊媒・狩人・狂人は人間カウント
+      else humanCount++;
     }
   });
 
